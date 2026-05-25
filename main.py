@@ -1,921 +1,378 @@
 import logging
-import json
 import os
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-)
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters, ConversationHandler
-)
+from datetime import datetime
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# ==================== تنظیمات ====================
-BOT_TOKEN = "8686266988:AAG_c7rpiEqWV5v6g04FRmdCPKBaKcGnqjM"
-ADMIN_ID = 8566998029
-ADMIN_USERNAME = "@Abolfazlctt"
-DATA_FILE = "data.json"
-
-logging.basicConfig(level=logging.INFO)
+# ۱. تنظیمات لاگ
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==================== استیت‌های مکالمه ====================
-(
-    WAITING_RECEIPT,
-    WAITING_CONFIG,
-    WAITING_NEW_PRICE_GIG,
-    WAITING_CARD_NUMBER,
-    WAITING_REJECT_REASON,
-    WAITING_CHARGE_AMOUNT,
-    WAITING_CHARGE_RECEIPT,
-    WAITING_BROADCAST_MSG,
-    WAITING_RENEW_CONFIG,
-    WAITING_RENEW_GIG,
-    WAITING_RENEW_RECEIPT,
-    WAITING_RENEW_REJECT_REASON,
-    WAITING_FREE_REFERRAL,
-) = range(13)
+# ۲. اطلاعات پایه ربات کوالا
+TOKEN = "8686266988:AAG_c7rpiEqWV5v6g04FRmdCPKBaKcGnqjM"
+ADMIN_ID = 8566998029  # ابوالفضل هدایتی
+CHANNEL_USERNAME = "@koalavpnip"
 
-# ==================== مدیریت داده‌ها ====================
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+# فایل‌های ذخیره اطلاعات
+USERS_FILE = "users_data.txt"
+SETTINGS_FILE = "settings.txt"
+WALLETS_FILE = "wallets.txt"
+REF_FILE = "referrals.txt"
+CLIENT_FILE = "last_client.txt"
+STATE_FILE = "admin_state.txt"
+
+REQUIRED_REFERRALS = 5
+
+def get_jalali_date():
+    now = datetime.now()
+    year = now.year - 621
+    return f"{year}/{now.month}/{now.day}"
+
+def load_settings():
+    settings = {"per_gb": 290000, "test_price": 60000, "card": "6219861852656031"}
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                for line in f.read().splitlines():
+                    if "=" in line:
+                        k, v = line.split("=")
+                        settings[k.strip()] = v.strip() if k.strip() == "card" else int(v.strip())
+        except: pass
+    return settings
+
+def save_settings(per_gb, test_price, card):
+    with open(SETTINGS_FILE, "w") as f:
+        f.write(f"per_gb={per_gb}\ntest_price={test_price}\ncard={card}\n")
+
+def get_wallet(user_id):
+    if os.path.exists(WALLETS_FILE):
+        with open(WALLETS_FILE, "r") as f:
+            for line in f.read().splitlines():
+                if f"{user_id}:" in line: return int(line.split(":")[1])
+    return 0
+
+def update_wallet(user_id, amount):
+    wallets = {}
+    if os.path.exists(WALLETS_FILE):
+        with open(WALLETS_FILE, "r") as f:
+            for line in f.read().splitlines():
+                if ":" in line:
+                    k, v = line.split(":")
+                    wallets[k] = int(v)
+    wallets[str(user_id)] = wallets.get(str(user_id), 0) + amount
+    with open(WALLETS_FILE, "w") as f:
+        for k, v in wallets.items(): f.write(f"{k}:{v}\n")
+
+def get_user_info(user_id):
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            for line in f.read().splitlines():
+                if f"{user_id}|" in line: return line.split("|")[1]
+    return get_jalali_date()
+
+def save_user(user_id):
+    date_str = get_jalali_date()
+    users = {}
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            for line in f.read().splitlines():
+                if "|" in line:
+                    k, v = line.split("|")
+                    users[k] = v
+    if str(user_id) not in users:
+        users[str(user_id)] = date_str
+        with open(USERS_FILE, "w") as f:
+            for k, v in users.items(): f.write(f"{k}|{v}\n")
+
+def get_refs(user_id):
+    count = 0
+    if os.path.exists(REF_FILE):
+        with open(REF_FILE, "r") as f:
+            for line in f.read().splitlines():
+                if ":" in line and line.split(":")[1] == str(user_id): count += 1
+    return count
+
+def add_referral(new_user, inviter):
+    if os.path.exists(REF_FILE):
+        with open(REF_FILE, "r") as f:
+            if f"{new_user}:" in f.read(): return False
+    with open(REF_FILE, "a") as f: f.write(f"{new_user}:{inviter}\n")
+    return True
+
+def get_updated_plans():
+    s = load_settings()
+    per_gb = s["per_gb"]
+    test_price = s["test_price"]
     return {
-        "prices": {"per_gig": 208000},
-        "card_number": "6037-XXXX-XXXX-XXXX",
-        "card_owner": "ابوالفضل",
-        "orders": {},
-        "users": {},
-        "renew_orders": {},
-        "charge_orders": {},
-        "referrals": {},
+        "plan_test": {"name": "⏱️ کانفیگ تست اختصاصی", "price": test_price, "text": f"{test_price:,} تومان"},
+        "plan_1g": {"name": "🟢 کانفیگ 1 گیگابایت", "price": per_gb, "text": f"{per_gb:,} تومان"},
+        "plan_2g": {"name": "🟢 کانفیگ 2 گیگابایت", "price": per_gb*2, "text": f"{per_gb*2:,} تومان"},
+        "plan_3g": {"name": "🟢 کانفیگ 3 گیگابایت", "price": per_gb*3, "text": f"{per_gb*3:,} تومان"},
+        "plan_4g": {"name": "🟢 کانفیگ 4 گیگابایت", "price": per_gb*4, "text": f"{per_gb*4:,} تومان"},
+        "plan_5g": {"name": "🟡 کانفیگ 5 گیگابایت", "price": per_gb*5, "text": f"{per_gb*5:,} تومان"},
+        "plan_6g": {"name": "🟡 کانفیگ 6 گیگابایت", "price": per_gb*6, "text": f"{per_gb*6:,} تومان"},
+        "plan_7g": {"name": "🟡 کانفیگ 7 گیگابایت", "price": per_gb*7, "text": f"{per_gb*7:,} تومان"},
+        "plan_8g": {"name": "🔴 کانفیگ 8 گیگابایت", "price": per_gb*8, "text": f"{per_gb*8:,} تومان"},
+        "plan_9g": {"name": "🔴 کانفیگ 9 گیگابایت", "price": per_gb*9, "text": f"{per_gb*9:,} تومان"},
+        "plan_10g": {"name": "🔴 کانفیگ 10 گیگابایت", "price": per_gb*10, "text": f"{per_gb*10:,} تومان"}
     }
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        return member.status in ['creator', 'administrator', 'member']
+    except: return False
 
-def get_or_create_user(data, user):
-    uid = str(user.id)
-    if uid not in data["users"]:
-        data["users"][uid] = {
-            "id": user.id,
-            "name": user.full_name,
-            "username": user.username or "ندارد",
-            "balance": 0,
-            "referral_count": 0,
-            "free_config_claimed": False,
-        }
-    return data["users"][uid]
-
-def calc_price(data, gig):
-    return data["prices"]["per_gig"] * gig
-
-# ==================== منوی پایین (Reply Keyboard) ====================
-def main_reply_keyboard():
+async def show_bottom_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, text_msg=None):
     keyboard = [
-        [KeyboardButton("🛒 خرید سرویس"), KeyboardButton("💰 افزایش موجودی")],
-        [KeyboardButton("👤 اطلاعات من"), KeyboardButton("🎁 سرویس رایگان")],
-        [KeyboardButton("⚙️ مدیریت سرویس‌ها"), KeyboardButton("📞 ارتباط با پشتیبانی")],
+        ["🛒 خرید سرویس جدید"],
+        ["👤 اطلاعات من", "🪙 افزایش موجودی"],
+        ["⚙️ مدیریت سرویس‌ها", "🎉 سرویس رایگان"],
+        ["💬 ارتباط با پشتیبانی"]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, persistent=True)
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    if text_msg is None:
+        text_msg = "🏠 به منوی اصلی ربات BAX KOALA خوش آمدید. لطفاً از دکمه‌های زیر استفاده کنید:"
+    if update.message:
+        await update.message.reply_text(text_msg, reply_markup=reply_markup)
+    elif update.callback_query:
+        await context.bot.send_message(chat_id=update.effective_user.id, text=text_msg, reply_markup=reply_markup)
 
-# ==================== /start ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    data = load_data()
-    u = get_or_create_user(data, user)
+    user_id = update.effective_user.id
+    save_user(user_id)
+    
+    if context.args and context.args[0].isdigit():
+        inviter_id = int(context.args[0])
+        if inviter_id != user_id:
+            if add_referral(user_id, inviter_id):
+                try: await context.bot.send_message(chat_id=inviter_id, text="🎉 یک کاربر جدید با لینک شما وارد ربات شد!")
+                except: pass
 
-    # ثبت رفرال
-    args = context.args
-    if args and args[0].startswith("ref_"):
-        referrer_id = args[0].replace("ref_", "")
-        uid = str(user.id)
-        if referrer_id != uid and uid not in data.get("referrals", {}):
-            data["referrals"][uid] = referrer_id
-            if str(referrer_id) in data["users"]:
-                data["users"][str(referrer_id)]["referral_count"] = \
-                    data["users"][str(referrer_id)].get("referral_count", 0) + 1
-
-    save_data(data)
-
-    price = data["prices"]["per_gig"]
-    text = (
-        f"👋 سلام {user.first_name} عزیز!\n\n"
-        "🔥 به ربات فروش V2Ray خوش اومدی!\n\n"
-        f"💎 قیمت هر گیگ: {price:,} تومان\n"
-        f"⚡ بدون محدودیت زمانی\n\n"
-        "از منوی پایین یه گزینه انتخاب کن 👇"
-    )
-    await update.message.reply_text(text, reply_markup=main_reply_keyboard())
-
-# ==================== هندل منوی پایین ====================
-async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    user = update.effective_user
-    data = load_data()
-    get_or_create_user(data, user)
-    save_data(data)
-
-    if text == "🛒 خرید سرویس":
-        await show_buy_menu(update, context)
-    elif text == "💰 افزایش موجودی":
-        await show_charge_menu(update, context)
-    elif text == "👤 اطلاعات من":
-        await show_my_info(update, context)
-    elif text == "🎁 سرویس رایگان":
-        await show_free_service(update, context)
-    elif text == "⚙️ مدیریت سرویس‌ها":
-        await show_manage_services(update, context)
-    elif text == "📞 ارتباط با پشتیبانی":
-        await show_support(update, context)
-
-# ==================== خرید سرویس ====================
-async def show_buy_menu(update: Update, cikontext: ContextTypes.DEFAULT_TYPE):
-    data = load_data()
-    p = data["prices"]["per_gig"]
-    keyboard = []
-    gigs = [1, 2, 3, 5, 10, 20, 30, 50]
-    for g in gigs:
-        price = calc_price(data, g)
-        keyboard.append([InlineKeyboardButton(
-            f"📦 {g} گیگ — {price:,} تومان",
-            callback_data=f"order_{g}"
-        )])
-    keyboard.append([InlineKeyboardButton("❌ بستن", callback_data="close")])
-    await update.message.reply_text(
-        "📦 حجم مورد نظر رو انتخاب کن:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-# ==================== افزایش موجودی ====================
-async def show_charge_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = load_data()
-    await update.message.reply_text(
-        "💰 مبلغ شارژ موردنظر رو به تومان وارد کن:\n"
-        "(مثلاً: 500000)",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return WAITING_CHARGE_AMOUNT
-
-async def receive_charge_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        amount = int(update.message.text.replace(",", "").strip())
-        if amount < 10000:
-            await update.message.reply_text("❌ حداقل مبلغ ۱۰,۰۰۰ تومان است.", reply_markup=main_reply_keyboard())
-            return ConversationHandler.END
-        context.user_data["charge_amount"] = amount
-        data = load_data()
-        await update.message.reply_text(
-            f"💳 برای شارژ {amount:,} تومان:\n\n"
-            f"🏦 شماره کارت:\n`{data['card_number']}`\n"
-            f"👤 به نام: {data['card_owner']}\n\n"
-            "📸 بعد از واریز، فیش رو ارسال کن:",
-            parse_mode="Markdown",
-            reply_markup=main_reply_keyboard()
-        )
-        return WAITING_CHARGE_RECEIPT
-    except:
-        await update.message.reply_text("❌ فقط عدد وارد کن.", reply_markup=main_reply_keyboard())
-        return ConversationHandler.END
-
-async def receive_charge_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    amount = context.user_data.get("charge_amount", 0)
-    charge_id = f"charge_{user.id}_{amount}"
-
-    data = load_data()
-    data.setdefault("charge_orders", {})[charge_id] = {
-        "user_id": user.id,
-        "username": user.username or "ندارد",
-        "name": user.full_name,
-        "amount": amount,
-        "status": "pending"
-    }
-    save_data(data)
-
-    caption = (
-        f"💰 درخواست شارژ کیف پول\n\n"
-        f"👤 {user.full_name}\n"
-        f"🆔 {user.id}\n"
-        f"📱 @{user.username or 'ندارد'}\n"
-        f"💵 مبلغ: {amount:,} تومان\n"
-        f"🔖 شناسه: {charge_id}"
-    )
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ تایید و شارژ", callback_data=f"charge_ok_{charge_id}"),
-        InlineKeyboardButton("❌ رد فیش", callback_data=f"charge_rej_{charge_id}"),
-    ]])
-    try:
-        if update.message.photo:
-            await context.bot.send_photo(ADMIN_ID, update.message.photo[-1].file_id, caption=caption, reply_markup=keyboard)
-        elif update.message.document:
-            await context.bot.send_document(ADMIN_ID, update.message.document.file_id, caption=caption, reply_markup=keyboard)
-        else:
-            await context.bot.send_message(ADMIN_ID, caption + f"\n\n📝 {update.message.text}", reply_markup=keyboard)
-    except Exception as e:
-        logger.error(e)
-
-    await update.message.reply_text("✅ فیش دریافت شد! منتظر تایید ادمین باش.", reply_markup=main_reply_keyboard())
-    return ConversationHandler.END
-
-# ==================== اطلاعات من ====================
-async def show_my_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    data = load_data()
-    u = get_or_create_user(data, user)
-    bot_username = (await context.bot.get_me()).username
-    ref_link = f"https://t.me/{bot_username}?start=ref_{user.id}"
-    ref_count = u.get("referral_count", 0)
-    needed = 10 - (ref_count % 10)
-    text = (
-        f"👤 اطلاعات حساب شما:\n\n"
-        f"🆔 آیدی: {user.id}\n"
-        f"👤 نام: {user.full_name}\n"
-        f"💎 موجودی کیف پول: {u.get('balance', 0):,} تومان\n\n"
-        f"👥 زیرمجموعه‌ها: {ref_count} نفر\n"
-        f"🎯 تا کانفیگ رایگان بعدی: {needed} نفر\n\n"
-        f"🔗 لینک دعوت:\n{ref_link}"
-    )
-    await update.message.reply_text(text)
-
-# ==================== سرویس رایگان ====================
-async def show_free_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    data = load_data()
-    u = get_or_create_user(data, user)
-    ref_count = u.get("referral_count", 0)
-    free_claimed = u.get("free_claimed_at", 0)
-    earned = ref_count // 10
-
-    text = (
-        "🎁 سرویس رایگان با دعوت دوستان!\n\n"
-        "📌 به ازای هر ۱۰ نفر دعوت، یک کانفیگ رایگان ۱ گیگ دریافت کن!\n\n"
-        f"👥 زیرمجموعه‌های تو: {ref_count} نفر\n"
-        f"🎯 کانفیگ رایگان قابل دریافت: {max(0, earned - free_claimed)}\n"
-    )
-    keyboard = []
-    if earned > free_claimed:
-        keyboard.append([InlineKeyboardButton("🎁 دریافت کانفیگ رایگان", callback_data="claim_free")])
-    keyboard.append([InlineKeyboardButton("❌ بستن", callback_data="close")])
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-# ==================== مدیریت سرویس‌ها ====================
-async def show_manage_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🔄 تمدید سرویس", callback_data="renew_service")],
-        [InlineKeyboardButton("❌ بستن", callback_data="close")],
-    ]
-    await update.message.reply_text(
-        "⚙️ مدیریت سرویس‌ها:\n\n"
-        "برای تمدید سرویس روی دکمه زیر بزن و کانفیگت رو ارسال کن.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-# ==================== پشتیبانی ====================
-async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"📞 برای پشتیبانی با ادمین در ارتباط باش:\n{ADMIN_USERNAME}\n\n"
-        "⏰ ساعات پاسخگویی: همیشه 😊"
-    )
-
-# ==================== هندل دکمه‌های Inline ====================
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = load_data()
-    user = query.from_user
-
-    # بستن
-    if query.data == "close":
-        await query.delete_message()
-        return
-
-    # ===== خرید =====
-    elif query.data.startswith("order_"):
-        gig = int(query.data.split("_")[1])
-        price = calc_price(data, gig)
-        u = get_or_create_user(data, user)
-        balance = u.get("balance", 0)
-        context.user_data["order_gig"] = gig
-        context.user_data["order_price"] = price
-
-        order_id = f"{user.id}_{gig}g"
-        data["orders"][order_id] = {
-            "user_id": user.id,
-            "username": user.username or "ندارد",
-            "name": user.full_name,
-            "gig": gig,
-            "price": price,
-            "status": "pending"
-        }
-        save_data(data)
-
-        if balance >= price:
-            # پرداخت از کیف پول
-            keyboard = [
-                [InlineKeyboardButton("✅ پرداخت از کیف پول", callback_data=f"pay_wallet_{order_id}")],
-                [InlineKeyboardButton("💳 پرداخت کارت به کارت", callback_data=f"pay_card_{order_id}")],
-                [InlineKeyboardButton("❌ انصراف", callback_data="close")],
-            ]
-            await query.edit_message_text(
-                f"📦 {gig} گیگ — {price:,} تومان\n\n"
-                f"💎 موجودی کیف پول: {balance:,} تومان\n\n"
-                "روش پرداخت رو انتخاب کن:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        else:
-            text = (
-                f"💳 اطلاعات پرداخت:\n\n"
-                f"📦 حجم: {gig} گیگ\n"
-                f"💰 مبلغ: {price:,} تومان\n\n"
-                f"🏦 شماره کارت:\n`{data['card_number']}`\n"
-                f"👤 به نام: {data['card_owner']}\n\n"
-                "📸 بعد از پرداخت، فیش رو ارسال کن."
-            )
-            keyboard = [[InlineKeyboardButton("❌ انصراف", callback_data="close")]]
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-            return WAITING_RECEIPT
-
-    # پرداخت از کیف پول
-    elif query.data.startswith("pay_wallet_"):
-        order_id = query.data.replace("pay_wallet_", "")
-        if order_id not in data["orders"]:
-            await query.edit_message_text("❌ سفارش یافت نشد.")
-            return
-        order = data["orders"][order_id]
-        uid = str(order["user_id"])
-        price = order["price"]
-        if data["users"][uid]["balance"] < price:
-            await query.edit_message_text("❌ موجودی کافی نیست.")
-            return
-        data["users"][uid]["balance"] -= price
-        data["orders"][order_id]["status"] = "paid_wallet"
-        save_data(data)
-        caption = (
-            f"🛒 سفارش جدید (کیف پول)\n\n"
-            f"👤 {order['name']}\n"
-            f"🆔 {order['user_id']}\n"
-            f"📱 @{order['username']}\n"
-            f"📦 {order['gig']} گیگ\n"
-            f"💰 {price:,} تومان\n"
-            f"🔖 شناسه: {order_id}"
-        )
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📤 ارسال کانفیگ", callback_data=f"approve_{order_id}"),
-        ]])
-        await context.bot.send_message(ADMIN_ID, caption, reply_markup=keyboard)
-        await query.edit_message_text("✅ پرداخت موفق! منتظر ارسال کانفیگ باش.")
-
-    # پرداخت کارت
-    elif query.data.startswith("pay_card_"):
-        order_id = query.data.replace("pay_card_", "")
-        order = data["orders"].get(order_id, {})
-        text = (
-            f"💳 اطلاعات پرداخت:\n\n"
-            f"📦 {order.get('gig','?')} گیگ — {order.get('price',0):,} تومان\n\n"
-            f"🏦 شماره کارت:\n`{data['card_number']}`\n"
-            f"👤 به نام: {data['card_owner']}\n\n"
-            "📸 فیش واریزی رو ارسال کن."
-        )
-        keyboard = [[InlineKeyboardButton("❌ انصراف", callback_data="close")]]
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-        context.user_data["order_gig"] = order.get("gig")
-        context.user_data["order_price"] = order.get("price")
-        return WAITING_RECEIPT
-
-    # ===== تایید شارژ کیف پول =====
-    elif query.data.startswith("charge_ok_"):
-        if user.id != ADMIN_ID:
-            return
-        charge_id = query.data.replace("charge_ok_", "")
-        charges = data.get("charge_orders", {})
-        if charge_id in charges:
-            ch = charges[charge_id]
-            uid = str(ch["user_id"])
-            get_or_create_user(data, type('U', (), {'id': ch["user_id"], 'full_name': ch["name"], 'username': ch["username"]})())
-            data["users"][uid]["balance"] = data["users"][uid].get("balance", 0) + ch["amount"]
-            charges[charge_id]["status"] = "approved"
-            save_data(data)
-            await context.bot.send_message(
-                ch["user_id"],
-                f"✅ کیف پول شما {ch['amount']:,} تومان شارژ شد!\n"
-                f"💎 موجودی جدید: {data['users'][uid]['balance']:,} تومان"
-            )
-            await query.edit_message_caption(caption=query.message.caption + "\n\n✅ تایید شد")
-
-    elif query.data.startswith("charge_rej_"):
-        if user.id != ADMIN_ID:
-            return
-        charge_id = query.data.replace("charge_rej_", "")
-        charges = data.get("charge_orders", {})
-        if charge_id in charges:
-            ch = charges[charge_id]
-            charges[charge_id]["status"] = "rejected"
-            save_data(data)
-            await context.bot.send_message(
-                ch["user_id"],
-                "❌ فیش شما تایید نشد.\n"
-                "📌 رسید شما فیک به نظر می‌رسد.\n"
-                f"📞 {ADMIN_USERNAME}"
-            )
-            await query.edit_message_caption(caption=query.message.caption + "\n\n❌ رد شد")
-
-    # ===== تایید/رد سفارش عادی =====
-    elif query.data.startswith("approve_"):
-        if user.id != ADMIN_ID:
-            return
-        order_id = query.data.replace("approve_", "")
-        if order_id in data["orders"]:
-            data["orders"][order_id]["status"] = "approved"
-            save_data(data)
-            context.user_data["pending_config_user"] = data["orders"][order_id]["user_id"]
-            context.user_data["pending_order_id"] = order_id
-            await query.edit_message_text(
-                f"✅ سفارش تایید شد!\n"
-                f"👤 {data['orders'][order_id]['name']}\n"
-                f"📦 {data['orders'][order_id]['gig']} گیگ\n\n"
-                "📤 کانفیگ رو اینجا بفرست:"
-            )
-            return WAITING_CONFIG
-
-    elif query.data.startswith("reject_"):
-        if user.id != ADMIN_ID:
-            return
-        order_id = query.data.replace("reject_", "")
-        context.user_data["reject_order_id"] = order_id
-        await query.edit_message_text("❌ دلیل رد سفارش رو بنویس:")
-        return WAITING_REJECT_REASON
-
-    # ===== تمدید سرویس =====
-    elif query.data == "renew_service":
-        await query.edit_message_text(
-            "🔄 تمدید سرویس\n\n"
-            "📋 کانفیگ فعلی‌ات رو اینجا ارسال کن:"
-        )
-        return WAITING_RENEW_CONFIG
-
-    # ===== دریافت کانفیگ رایگان =====
-    elif query.data == "claim_free":
-        uid = str(user.id)
-        u = data["users"].get(uid, {})
-        ref_count = u.get("referral_count", 0)
-        free_claimed = u.get("free_claimed_at", 0)
-        earned = ref_count // 10
-        if earned > free_claimed:
-            data["users"][uid]["free_claimed_at"] = free_claimed + 1
-            save_data(data)
-            await context.bot.send_message(
-                ADMIN_ID,
-                f"🎁 درخواست کانفیگ رایگان\n\n"
-                f"👤 {user.full_name}\n"
-                f"🆔 {user.id}\n"
-                f"📱 @{user.username or 'ندارد'}\n"
-                f"📦 ۱ گیگ رایگان",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📤 ارسال کانفیگ رایگان", callback_data=f"send_free_{user.id}")
-                ]])
-            )
-            await query.edit_message_text("✅ درخواست ثبت شد! به زودی کانفیگ ارسال می‌شه.")
-        else:
-            await query.edit_message_text("❌ هنوز به تعداد کافی دعوت نداری.")
-
-    elif query.data.startswith("send_free_"):
-        if user.id != ADMIN_ID:
-            return
-        customer_id = int(query.data.replace("send_free_", ""))
-        context.user_data["pending_config_user"] = customer_id
-        context.user_data["pending_order_id"] = None
-        await query.edit_message_text("📤 کانفیگ رایگان رو اینجا بفرست:")
-        return WAITING_CONFIG
-
-    # ===== تایید/رد تمدید =====
-    elif query.data.startswith("renew_ok_"):
-        if user.id != ADMIN_ID:
-            return
-        renew_id = query.data.replace("renew_ok_", "")
-        if renew_id in data.get("renew_orders", {}):
-            r = data["renew_orders"][renew_id]
-            context.user_data["pending_renew_user"] = r["user_id"]
-            context.user_data["pending_renew_id"] = renew_id
-            data["renew_orders"][renew_id]["status"] = "approved"
-            save_data(data)
-            await query.edit_message_text(
-                f"✅ تمدید تایید شد!\n"
-                f"👤 {r['name']}\n"
-                f"📦 {r['gig']} گیگ\n\n"
-                "بعد از تمدید، پیام تایید رو بفرست یا کانفیگ جدید رو ارسال کن:",
-            )
-            return WAITING_CONFIG
-
-    elif query.data.startswith("renew_rej_"):
-         if user.id != ADMIN_ID:
-            return
-        renew_id = query.data.replace("renew_rej_", "")
-        context.user_data["renew_reject_id"] = renew_id
-        await query.edit_message_text("❌ دلیل رد تمدید رو بنویس:")
-        return WAITING_RENEW_REJECT_REASON
-
-    # ===== پنل ادمین =====
-    elif query.data == "admin_stats":
-        if user.id != ADMIN_ID:
-            return
-        total = len(data.get("orders", {}))
-        approved = sum(1 for o in data["orders"].values() if o.get("status") in ("approved", "delivered"))
-        pending = sum(1 for o in data["orders"].values() if o.get("status") == "pending")
-        users = len(data.get("users", {}))
-        total_balance = sum(u.get("balance", 0) for u in data["users"].values())
-        charges = data.get("charge_orders", {})
-        total_charged = sum(c["amount"] for c in charges.values() if c.get("status") == "approved")
-        keyboard = [[InlineKeyboardButton("❌ بستن", callback_data="close")]]
-        await query.edit_message_text(
-            f"📊 آمار ربات:\n\n"
-            f"👥 کل کاربران: {users}\n"
-            f"📝 کل سفارش‌ها: {total}\n"
-            f"⏳ در انتظار: {pending}\n"
-            f"✅ تحویل داده شده: {approved}\n\n"
-            f"💎 موجودی کل کیف پول‌ها: {total_balance:,} ت\n"
-            f"💰 کل شارژ تایید شده: {total_charged:,} ت",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-    elif query.data == "change_gig_price":
-        if user.id != ADMIN_ID:
-            return
-        await query.edit_message_text("💲 قیمت جدید هر گیگ رو به تومان وارد کن:")
-        return WAITING_NEW_PRICE_GIG
-
-    elif query.data == "admin_card":
-        if user.id != ADMIN_ID:
-            return
-        await query.edit_message_text(f"💳 کارت فعلی: {data['card_number']}\n\nشماره کارت جدید رو وارد کن:")
-        return WAITING_CARD_NUMBER
-
-    elif query.data == "admin_back":
-        if user.id != ADMIN_ID:
-            return
-        await query.edit_message_text("🛠 پنل ادمین:", reply_markup=admin_menu())
-
-# ==================== دریافت فیش خرید ====================
-async def receive_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    gig = context.user_data.get("order_gig", "?")
-    price = context.user_data.get("order_price", 0)
-    order_id = f"{user.id}_{gig}g"
-
-    data = load_data()
-    data["orders"].setdefault(order_id, {}).update({
-        "user_id": user.id,
-        "username": user.username or "ندارد",
-        "name": user.full_name,
-        "gig": gig,
-        "price": price,
-        "status": "pending"
-    })
-    save_data(data)
-
-    caption = (
-        f"🔔 فیش جدید!\n\n"
-        f"👤 {user.full_name}\n"
-        f"🆔 {user.id}\n"
-        f"📱 @{user.username or 'ندارد'}\n"
-        f"📦 {gig} گیگ\n"
-        f"💰 {price:,} تومان\n"
-        f"🔖 شناسه: {order_id}"
-    )
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ تایید", callback_data=f"approve_{order_id}"),
-        InlineKeyboardButton("❌ رد", callback_data=f"reject_{order_id}"),
-    ]])
-    try:
-        if update.message.photo:
-            await context.bot.send_photo(ADMIN_ID, update.message.photo[-1].file_id, caption=caption, reply_markup=keyboard)
-        elif update.message.document:
-            await context.bot.send_document(ADMIN_ID, update.message.document.file_id, caption=caption, reply_markup=keyboard)
-        else:
-            await context.bot.send_message(ADMIN_ID, caption + f"\n\n📝 {update.message.text}", reply_markup=keyboard)
-    except Exception as e:
-        logger.error(e)
-
-    await update.message.reply_text("✅ فیش دریافت شد! منتظر تایید ادمین باش.", reply_markup=main_reply_keyboard())
-    return ConversationHandler.END
-
-# ==================== ارسال کانفیگ ====================
-async def send_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return ConversationHandler.END
-    customer_id = context.user_data.get("pending_config_user")
-    order_id = context.user_data.get("pending_order_id")
-    if not customer_id:
-        await update.message.reply_text("❌ اطلاعات سفارش پیدا نشد.")
-        return ConversationHandler.END
-    try:
-        await context.bot.send_message(
-            chat_id=customer_id,
-            text=(
-                "🎉 سفارش شما تایید شد!\n\n"
-                "📋 کانفیگ V2Ray:\n\n"
-                f"`{update.message.text}`\n\n"
-                f"✅ موفق باشی!\n📞 پشتیبانی: {ADMIN_USERNAME}"
-            ),
-            parse_mode="Markdown"
-        )
-        if order_id:
-            data = load_data()
-            if order_id in data["orders"]:
-                data["orders"][order_id]["status"] = "delivered"
-                save_data(data)
-        await update.message.reply_text("✅ کانفیگ ارسال شد!")
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {e}")
-    return ConversationHandler.END
-
-# ==================== رد سفارش ====================
-async def reject_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return ConversationHandler.END
-    order_id = context.user_data.get("reject_order_id")
-    reason = update.message.text
-    data = load_data()
-    if order_id and order_id in data["orders"]:
-        customer_id = data["orders"][order_id]["user_id"]
-        data["orders"][order_id]["status"] = "rejected"
-        save_data(data)
-        try:
-            await context.bot.send_message(
-                customer_id,
-                f"❌ سفارش شما تایید نشد.\n📝 دلیل: {reason}\n\n"
-                "💡 ممکنه فیش ارسالی معتبر نباشه.\n"
-                f"📞 پشتیبانی: {ADMIN_USERNAME}"
-            )
-        except:
-            pass
-    await update.message.reply_text("✅ سفارش رد شد.")
-    return ConversationHandler.END
-
-# ==================== تمدید سرویس ====================
-async def receive_renew_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["renew_config"] = update.message.text
-    data = load_data()
-    p = data["prices"]["per_gig"]
-    keyboard = []
-    for g in [1, 2, 3, 5, 10, 20]:
-        price = calc_price(data, g)
-        keyboard.append([InlineKeyboardButton(f"📦 {g} گیگ — {price:,} ت", callback_data=f"renew_gig_{g}")])
-    keyboard.append([InlineKeyboardButton("❌ انصراف", callback_data="close")])
-    await update.message.reply_text("📦 چقدر حجم میخوای تمدید کنی؟", reply_markup=InlineKeyboardMarkup(keyboard))
-    return WAITING_RENEW_GIG
-
-async def receive_renew_gig_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    gig = int(query.data.split("_")[2])
-    data = load_data()
-    price = calc_price(data, gig)
-    user = query.from_user
-    context.user_data["renew_gig"] = gig
-    context.user_data["renew_price"] = price
-
-    renew_id = f"renew_{user.id}_{gig}g"
-    data.setdefault("renew_orders", {})[renew_id] = {
-        "user_id": user.id,
-        "username": user.username or "ندارد",
-        "name": user.full_name,
-        "gig": gig,
-        "price": price,
-        "config": context.user_data.get("renew_config", ""),
-        "status": "pending"
-    }
-    save_data(data)
-
-    u = data["users"].get(str(user.id), {})
-    balance = u.get("balance", 0)
-
-    if balance >= price:
+    if not await check_membership(user_id, context):
         keyboard = [
-            [InlineKeyboardButton("✅ پرداخت از کیف پول", callback_data=f"renew_wallet_{renew_id}")],
-            [InlineKeyboardButton("💳 کارت به کارت", callback_data=f"renew_card_{renew_id}")],
-            [InlineKeyboardButton("❌ انصراف", callback_data="close")],
+            [InlineKeyboardButton("📢 عضویت در کانال کوالا", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")],
+            [InlineKeyboardButton("✅ عضو شدم (تایید)", callback_data="check_join")]
         ]
-        await query.edit_message_text(
-            f"📦 تمدید {gig} گیگ — {price:,} تومان\n"
-            f"💎 موجودی: {balance:,} تومان\n\nروش پرداخت:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        await query.edit_message_text(
-            f"💳 پرداخت تمدید:\n\n"
-            f"📦 {gig} گیگ — {price:,} تومان\n\n"
-            f"🏦 شماره کارت:\n`{data['card_number']}`\n"
-            f"👤 {data['card_owner']}\n\n"
-            "📸 فیش واریزی رو ارسال کن:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ انصراف", callback_data="close")]])
-        )
-        context.user_data["renew_id"] = renew_id
-        return WAITING_RENEW_RECEIPT
-
-async def receive_renew_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    renew_id = context.user_data.get("renew_id")
-    data = load_data()
-    renew = data.get("renew_orders", {}).get(renew_id, {})
-    gig = renew.get("gig", "?")
-    price = renew.get("price", 0)
-    config = renew.get("config", "")
-
-    caption = (
-        f"🔄 درخواست تمدید سرویس\n\n"
-        f"👤 {user.full_name}\n"
-        f"🆔 {user.id}\n"
-        f"📱 @{user.username or 'ندارد'}\n"
-        f"📦 {gig} گیگ — {price:,} تومان\n"
-        f"📋 کانفیگ: {config[:50]}...\n"
-        f"🔖 شناسه: {renew_id}"
-    )
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ تایید تمدید", callback_data=f"renew_ok_{renew_id}"),
-        InlineKeyboardButton("❌ رد فیش", callback_data=f"renew_rej_{renew_id}"),
-    ]])
-    try:
-        if update.message.photo:
-            await context.bot.send_photo(ADMIN_ID, update.message.photo[-1].file_id, caption=caption, reply_markup=keyboard)
-        elif update.message.document:
-            await context.bot.send_document(ADMIN_ID, update.message.document.file_id, caption=caption, reply_markup=keyboard)
-        else:
-            await context.bot.send_message(ADMIN_ID, caption, reply_markup=keyboard)
-    except Exception as e:
-        logger.error(e)
-
-    await update.message.reply_text("✅ درخواست تمدید ثبت شد! منتظر تایید ادمین باش.", reply_markup=main_reply_keyboard())
-    return ConversationHandler.END
-
-async def reject_renew(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return ConversationHandler.END
-    renew_id = context.user_data.get("renew_reject_id")
-    data = load_data()
-    if renew_id and renew_id in data.get("renew_orders", {}):
-        r = data["renew_orders"][renew_id]
-        r["status"] = "rejected"
-        save_data(data)
-        try:
-            await context.bot.send_message(
-                r["user_id"],
-                f"❌ درخواست تمدید شما رد شد.\n📝 دلیل: {update.message.text}\n\n"
-                "💡 ممکنه فیش فیک باشه.\n"
-                f"📞 {ADMIN_USERNAME}"
-            )
-        except:
-            pass
-    await update.message.reply_text("✅ تمدید رد شد.")
-    return ConversationHandler.END
-
-# ==================== پنل ادمین ====================
-def admin_menu():
-    keyboard = [
-        [InlineKeyboardButton("💲 تغییر قیمت هر گیگ", callback_data="change_gig_price")],
-        [InlineKeyboardButton("💳 تغییر شماره کارت", callback_data="admin_card")],
-        [InlineKeyboardButton("📊 آمار", callback_data="admin_stats")],
-        [InlineKeyboardButton("📢 ارسال پیام به همه", callback_data="broadcast")],
-        [InlineKeyboardButton("❌ بستن", callback_data="close")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ شما ادمین نیستید!")
+        await update.message.reply_text("⚠️ برای استفاده از ربات BAX KOALA ابتدا باید در کانال ما عضو شوید:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
-    data = load_data()
-    text = (
-        f"🛠 پنل ادمین\n\n"
-        f"💲 قیمت هر گیگ: {data['prices']['per_gig']:,} تومان\n"
-        f"💳 شماره کارت: {data['card_number']}"
-    )
-    await update.message.reply_text(text, reply_markup=admin_menu())
 
-async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_bottom_menu(update, context)
+
+async def handle_text_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text
+    PLANS = get_updated_plans()
+    s = load_settings()
+
+    # مدیریت بخش مدیریت (ارسال کانفیگ یا ثبت مبلغ شارژ دستی)
+    if user_id == ADMIN_ID and os.path.exists(STATE_FILE) and os.path.exists(CLIENT_FILE):
+        with open(STATE_FILE, "r") as f: state = f.read().strip()
+        with open(CLIENT_FILE, "r") as f: target_user = int(f.read().strip())
+        
+        if state == "waiting_for_config":
+            try:
+                await context.bot.send_message(chat_id=target_user, text=f"🚀 **کانفیگ اختصاصی شما صادر شد:**\n\n`{text}`", parse_mode="Markdown")
+                await update.message.reply_text(f"✅ کانفیگ با موفقیت به مشتری ({target_user}) تحویل داده شد.")
+                if os.path.exists(CLIENT_FILE): os.remove(CLIENT_FILE)
+                if os.path.exists(STATE_FILE): os.remove(STATE_FILE)
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطا در ارسال پیام به مشتری: {e}")
+            return
+            
+        elif state == "waiting_for_amount":
+            try:
+                charge_amount = int(text)
+                update_wallet(target_user, charge_amount)
+                await context.bot.send_message(chat_id=target_user, text=f"🎉 کیف پول شما با موفقیت به مبلغ {charge_amount:,} تومان شارژ شد!")
+                await update.message.reply_text(f"✅ مبلغ {charge_amount:,} تومان با موفقیت به کیف پول کاربر `{target_user}` اضافه شد.")
+                if os.path.exists(CLIENT_FILE): os.remove(CLIENT_FILE)
+                if os.path.exists(STATE_FILE): os.remove(STATE_FILE)
+            except ValueError:
+                await update.message.reply_text("❌ لطفاً فقط عدد انگلیسی وارد کنید.")
+            return
+
+    if not await check_membership(user_id, context):
+        await start(update, context)
+        return
+
+    # دریافت مبلغ دلخواه از کاربر برای شارژ کیف پول
+    if context.user_data.get('waiting_custom_amount'):
+        try:
+            amount = int(text)
+            if amount < 5000:
+                await update.message.reply_text("❌ حداقل مبلغ شارژ ۵,۰۰۰ تومان می‌باشد. لطفاً مجدداً مبلغ را وارد کنید:")
+                return
+            context.user_data['waiting_custom_amount'] = False
+            context.user_data['action'] = 'charge'
+            context.user_data['charge_amount'] = amount
+            
+            card_text = f"💳 **درخواست شارژ کیف پول بمبلغ {amount:,} تومان**\n\nلطفاً مبلغ فوق را به شماره کارت زیر واریز نمایید:\n\n`{s['card']}`\n👤 به نام: ابوالفضل هدایتی\n\n📸 پس از واریز وجه، **فقط عکس فیش** را در همینجا ارسال کنید."
+            await update.message.reply_text(card_text, parse_mode="Markdown")
+        except ValueError:
+            await update.message.reply_text("❌ لطفاً مبلغ را فقط به صورت عدد (به انگلیسی) وارد کنید:")
+        return
+
+    if text == "🛒 خرید سرویس جدید":
+        keyboard = []
+        for k, v in PLANS.items():
+            keyboard.append([InlineKeyboardButton(f"{v['name']} ➖ {v['text']}", callback_data=f"select_{k}")])
+        await update.message.reply_text("📋 پلان مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif text == "👤 اطلاعات من":
+        refs = get_refs(user_id)
+        join_date = get_user_info(user_id)
+        balance = get_wallet(user_id)
+        info_text = (
+            f"─── 👤 اطلاعات حساب شما ───\n\n"
+            f"👤 شناسه کاربری: `{user_id}`\n"
+            f"👥 تعداد زیرمجموعه‌ها: {refs} عدد\n"
+            f"📊 موجودی کیف پول: {balance:,} تومان\n"
+            f"📈 قیمت پایه هر گیگ: {s['per_gb']:,} تومان\n\n"
+            f"📅 تاریخ عضویت: {join_date}"
+        )
+        inline_kb = [[InlineKeyboardButton("🎫 اعمال کد تخفیف", callback_data="apply_promo")]]
+        await update.message.reply_text(info_text, reply_markup=InlineKeyboardMarkup(inline_kb), parse_mode="Markdown")
+
+    elif text == "🪙 افزایش موجودی":
+        per_gb = s["per_gb"]
+        inline_kb = [
+            [InlineKeyboardButton(f"💵 شارژ معادل ۱ گیگ ({per_gb:,} تومان)", callback_data=f"reqcharge_{per_gb}")],
+            [InlineKeyboardButton(f"💵 شارژ معادل ۲ گیگ ({per_gb*2:,} تومان)", callback_data=f"reqcharge_{per_gb*2}")],
+            [InlineKeyboardButton(f"💵 شارژ معادل ۳ گیگ ({per_gb*3:,} تومان)", callback_data=f"reqcharge_{per_gb*3}")],
+            [InlineKeyboardButton(f"💵 شارژ معادل ۵ گیگ ({per_gb*5:,} تومان)", callback_data=f"reqcharge_{per_gb*5}")],
+            [InlineKeyboardButton("✍️ ورود مبلغ دلخواه (تومان)", callback_data="custom_charge")]
+        ]
+        await update.message.reply_text("🪙 لطفاً مبلغی که می‌خواهید کیف پولتان شارژ شود را انتخاب یا به صورت دلخواه وارد کنید:", reply_markup=InlineKeyboardMarkup(inline_kb))
+
+    elif text == "⚙️ مدیریت سرویس‌ها":
+        await update.message.reply_text("‼️ شما هیچ سرویسی ندارید.\nابتدا از بخش ' خرید سرویس جدید ' سرویسی تهیه فرمایید.")
+
+    elif text == "🎉 سرویس رایگان":
+        bot_info = await context.bot.get_me()
+        refs = get_refs(user_id)
+        ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
+        ref_text = f"👥 **سیستم زیرمجموعه‌گیری کوالا VPN**\n\n🔗 لینک اختصاصی شما:\n{ref_link}\n\n📊 تعداد افراد دعوت شده: {refs} نفر\n🎁 هدیه: با دعوت {REQUIRED_REFERRALS} نفر، یک کانفیگ رایگان بگیرید!"
+        keyboard = []
+        if refs >= REQUIRED_REFERRALS:
+            keyboard.append([InlineKeyboardButton("🎁 دریافت کانفیگ جایزه", callback_data="claim_reward")])
+        await update.message.reply_text(ref_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif text == "💬 ارتباط با پشتیبانی":
+        kb = [[InlineKeyboardButton("👨‍💻 پیام به پشتیبانی اصلی", url="https://t.me/Abolfazlctt")]]
+        await update.message.reply_text("جهت ارتباط با مدیریت و پشتیبانی به پی‌وی زیر پیام دهید:", reply_markup=InlineKeyboardMarkup(kb))
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.from_user.id != ADMIN_ID:
-        return
-    await query.edit_message_text("📢 پیام خود را بنویس (به همه کاربران ارسال می‌شه):")
-    return WAITING_BROADCAST_MSG
+    user_id = query.from_user.id
+    PLANS = get_updated_plans()
+    s = load_settings()
 
-async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return ConversationHandler.END
-    data = load_data()
-    msg = update.message.text
-    sent, failed = 0, 0
-    for uid, u in data["users"].items():
-        try:
-            await context.bot.send_message(int(uid), f"📢 پیام از ادمین:\n\n{msg}")
-            sent += 1
-        except:
-            failed += 1
-    await update.message.reply_text(f"✅ ارسال شد!\n📤 موفق: {sent}\n❌ ناموفق: {failed}")
-    return ConversationHandler.END
+    if query.data == "check_join":
+        if await check_membership(user_id, context): await show_bottom_menu(update, context, "✅ عضویت شما تایید شد!")
+        else: await context.bot.send_message(chat_id=user_id, text="❌ هنوز عضو کانال نشده‌اید.")
 
-async def update_gig_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return ConversationHandler.END
+    elif query.data == "apply_promo":
+        await context.bot.send_message(chat_id=user_id, text="🎫 در حال حاضر کد تخفیف فعالی وجود ندارد.")
+
+    elif query.data == "custom_charge":
+        context.user_data['waiting_custom_amount'] = True
+        await context.bot.send_message(chat_id=user_id, text="✍️ لطفاً مبلغ مورد نظر خود را برای شارژ کیف پول به **تومان** وارد کنید (مثال: 150000):")
+
+    elif query.data.startswith("reqcharge_"):
+        amount = int(query.data.split("_")[1])
+        context.user_data['action'] = 'charge'
+        context.user_data['charge_amount'] = amount
+        text = f"💳 **درخواست شارژ کیف پول بمبلغ {amount:,} تومان**\n\nلطفاً مبلغ فوق را به شماره کارت زیر واریز نمایید:\n\n`{s['card']}`\n👤 به نام: ابوالفضل هدایتی\n\n📸 پس از واریز وجه، **فقط عکس فیش** را ارسال کنید."
+        await query.edit_message_text(text, parse_mode="Markdown")
+
+    elif query.data.startswith("select_"):
+        plan_id = query.data.replace("select_", "")
+        plan_info = PLANS.get(plan_id)
+        balance = get_wallet(user_id)
+        context.user_data['action'] = 'buy'
+        context.user_data['selected_plan'] = plan_info['name']
+        context.user_data['selected_price'] = plan_info['price']
+        
+        text = f"🛍️ **پلان:** {plan_info['name']}\n💰 **قیمت:** {plan_info['text']}\n💵 **موجودی شما:** {balance:,} تومان\n\nروش پرداخت را انتخاب کنید:"
+        keyboard = [[InlineKeyboardButton("💳 کارت به کارت (ارسال فیش)", callback_data="pay_card")]]
+        if balance >= plan_info['price']:
+            keyboard.append([InlineKeyboardButton("💰 پرداخت سریع با کیف پول", callback_data="pay_wallet")])
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif query.data == "pay_card":
+        plan_name = context.user_data.get('selected_plan')
+        price_text = f"{context.user_data.get('selected_price', 0):,} تومان"
+        text = f"🛍️ **پلان:** {plan_name}\n💰 **قیمت:** {price_text}\n\n💳 شماره کارت جهت واریز:\n`{s['card']}`\n👤 به نام: ابوالفضل هدایتی\n\n📸 پس از واریز، عکس فیش را در همینجا ارسال کنید."
+        await query.edit_message_text(text, parse_mode="Markdown")
+
+    elif query.data == "pay_wallet":
+        plan_name = context.user_data.get('selected_plan')
+        price = context.user_data.get('selected_price', 0)
+        if get_wallet(user_id) >= price:
+            update_wallet(user_id, -price)
+            admin_keyboard = [[InlineKeyboardButton("✅ ارسال کانفیگ", callback_data=f"approve_{user_id}")]]
+            await context.bot.send_message(chat_id=ADMIN_ID, text=f"💰 **خرید آنی با کیف پول!**\n\n👤 مشتری: {query.from_user.first_name}\n🆔 آیدی: `{user_id}`\n🛍️ پلان: {plan_name}\n\n(پول از کیف پول کسر شد؛ جهت فرستادن کانفیگ دکمه زیر را بزنید).", reply_markup=InlineKeyboardMarkup(admin_keyboard))
+            await query.edit_message_text("✅ پرداخت با کیف پول موفقیت‌آمیز بود! درخواست به ادمین ارسال شد.")
+
+    elif query.data.startswith("approve_"):
+        client_id = query.data.split("_")[1]
+        with open(CLIENT_FILE, "w") as f: f.write(client_id)
+        with open(STATE_FILE, "w") as f: f.write("waiting_for_config")
+        await query.message.reply_text(f"🟢 خرید یا فیش کاربر `{client_id}` تایید شد.\n\n👇 اکنون متن کانفیگ را بفرستید:")
+
+    elif query.data.startswith("wallet_input_amount_"):
+        client_id = query.data.split("_")[3]
+        with open(CLIENT_FILE, "w") as f: f.write(client_id)
+        with open(STATE_FILE, "w") as f: f.write("waiting_for_amount")
+        await query.message.reply_text(f"🟢 فیش کاربر `{client_id}` را رویت کردید.\n\n👇 مبلغ دلخواه را به **عددی و به تومان** وارد کنید تا کیف پول کاربر شارژ شود:")
+
+async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if update.message.photo:
+        action = context.user_data.get('action', 'buy')
+        if action == 'charge':
+            amount = context.user_data.get('charge_amount', 0)
+            admin_kb = [[InlineKeyboardButton("✅ ثبت مبلغ و شارژ کیف پول", callback_data=f"wallet_input_amount_{user_id}")]]
+            
+            caption_text = f"🪙 **فیش افزایش موجودی کیف پول!**\n\n👤 کاربر: {update.effective_user.first_name}\n🆔 آیدی: `{user_id}`\n💵 مبلغ اعلامی کاربر: {amount:,} تومان\n\n📌 برای ثبت فیش و تعیین مبلغ واریزی دکمه زیر را بزنید."
+            await context.bot.send_photo(chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id, caption=caption_text, reply_markup=InlineKeyboardMarkup(admin_kb))
+            await update.message.reply_text("✅ فیش شارژ برای مدیریت ارسال شد و پس از تایید حساب شما شارژ می‌شود.")
+            context.user_data['action'] = 'buy'
+        else:
+            plan_name = context.user_data.get('selected_plan', 'نامشخص')
+            admin_keyboard = [[InlineKeyboardButton("✅ تایید فیش و خرید", callback_data=f"approve_{user_id}")]]
+            await context.bot.send_photo(chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id, caption=f"🚨 **فیش خرید عادی کانفیگ!**\n\n👤 مشتری: {update.effective_user.first_name}\n🆔 آیدی: `{user_id}`\n🛍️ پلان: {plan_name}\n\n📌 پس از زدن دکمه تایید، باید متن کانفیگ را بفرستید.", reply_markup=InlineKeyboardMarkup(admin_keyboard))
+            await update.message.reply_text("✅ فیش خرید شما برای مدیریت ارسال شد.")
+
+async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID or not context.args: return
     try:
-        new_price = int(update.message.text.replace(",", "").strip())
-        data = load_data()
-        data["prices"]["per_gig"] = new_price
-        save_data(data)
-        await update.message.reply_text(f"✅ قیمت هر گیگ: {new_price:,} تومان", reply_markup=admin_menu())
-    except:
-        await update.message.reply_text("❌ فقط عدد وارد کن.")
-    return ConversationHandler.END
+        new_price = int(context.args[0])
+        s = load_settings()
+        save_settings(new_price, s["test_price"], s["card"])
+        await update.message.reply_text(f"✅ قیمت هر گیگابایت به {new_price:,} تومان تغییر کرد.")
+    except: pass
 
-async def update_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return ConversationHandler.END
-    data = load_data()
-    data["card_number"] = update.message.text.strip()
-    save_data(data)
-    await update.message.reply_text(f"✅ شماره کارت: {data['card_number']}", reply_markup=admin_menu())
-    return ConversationHandler.END
+async def set_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID or not context.args: return
+    new_card = context.args[0]
+    s = load_settings()
+    save_settings(s["per_gb"], s["test_price"], new_card)
+    await update.message.reply_text(f"✅ شماره کارت ربات تغییر یافت به:\n`{new_card}`", parse_mode="Markdown")
 
-# ==================== main ====================
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    # ConversationHandler اصلی
-    conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(button_handler),
-            MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(
-                "^(🛒 خرید سرویس|💰 افزایش موجودی|👤 اطلاعات من|🎁 سرویس رایگان|⚙️ مدیریت سرویس‌ها|📞 ارتباط با پشتیبانی)$"
-            ), handle_menu),
-        ],
-        states={
-            WAITING_RECEIPT: [
-                MessageHandler(filters.PHOTO | filters.Document.ALL | filters.TEXT & ~filters.COMMAND, receive_receipt),
-                CallbackQueryHandler(button_handler),
-            ],
-            WAITING_CONFIG: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, send_config),
-            ],
-            WAITING_NEW_PRICE_GIG: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, update_gig_price),
-            ],
-            WAITING_CARD_NUMBER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, update_card),
-            ],
-            WAITING_REJECT_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, reject_order),
-            ],
-            WAITING_CHARGE_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_charge_amount),
-            ],
-            WAITING_CHARGE_RECEIPT: [
-                MessageHandler(filters.PHOTO | filters.Document.ALL | filters.TEXT & ~filters.COMMAND, receive_charge_receipt),
-            ],
-            WAITING_BROADCAST_MSG: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, send_broadcast),
-            ],
-            WAITING_RENEW_CONFIG: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_renew_config),
-            ],
-            WAITING_RENEW_GIG: [
-                CallbackQueryHandler(receive_renew_gig_cb, pattern="^renew_gig_"),
-                CallbackQueryHandler(button_handler),
-            ],
-            WAITING_RENEW_RECEIPT: [
-                MessageHandler(filters.PHOTO | filters.Document.ALL | filters.TEXT & ~filters.COMMAND, receive_renew_receipt),
-            ],
-            WAITING_RENEW_REJECT_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, reject_renew),
-            ],
-        },
-        fallbacks=[CommandHandler("start", start)],
-        per_user=True,
-        per_chat=True,
-        allow_reentry=True,
-    )
-
-    # broadcast callback جداگانه
-    conv_broadcast = ConversationHandler(
-        entry_points=[CallbackQueryHandler(broadcast_handler, pattern="^broadcast$")],
-        states={
-            WAITING_BROADCAST_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_broadcast)],
-        },
-        fallbacks=[CommandHandler("start", start)],
-        per_user=True,
-        per_chat=True,
-    )
-
+    app = Application.builder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(conv_broadcast)
-    app.add_handler(conv)
-
-    print("✅ ربات شروع به کار کرد!")
+    app.add_handler(CommandHandler("setprice", set_price))
+    app.add_handler(CommandHandler("setcard", set_card))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_buttons))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_messages))
+    print("🚀 ربات کوالا پچ شد... در حال روشن شدن")
     app.run_polling()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

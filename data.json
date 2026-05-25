@@ -1,0 +1,54 @@
+{
+  "prices": {
+    "per_gig": 208000
+  },
+  "card_number": "6219861852656031",
+  "card_owner": "ابوالفضل هدایتی",
+  "orders": {
+    "8566998029_1g": {
+      "user_id": 8566998029,
+      "username": "Abolfazlctt",
+      "name": "Abol • CT",
+      "gig": 1,
+      "price": 208000,
+      "status": "pending"
+    },
+    "7343582768_1g": {
+      "user_id": 7343582768,
+      "username": "Abolfazl_nd",
+      "name": "ابوالفضل",
+      "gig": 1,
+      "price": 208000,
+      "status": "approved"
+    },
+    "7343582768_8g": {
+      "user_id": 7343582768,
+      "username": "Abolfazl_nd",
+      "name": "ابوالفضل",
+      "gig": 8,
+      "price": 1664000,
+      "status": "pending"
+    }
+  },
+  "users": {
+    "8566998029": {
+      "id": 8566998029,
+      "name": "Abol • CT",
+      "username": "Abolfazlctt",
+      "balance": 0,
+      "referral_count": 0,
+      "free_config_claimed": false
+    },
+    "7343582768": {
+      "id": 7343582768,
+      "name": "ابوالفضل",
+      "username": "Abolfazl_nd",
+      "balance": 0,
+      "referral_count": 0,
+      "free_config_claimed": false
+    }
+  },
+  "renew_orders": {},
+  "charge_orders": {},
+  "referrals": {}
+}
